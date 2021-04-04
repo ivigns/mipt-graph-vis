@@ -97,7 +97,7 @@ def dfs_build(
 
         required_shifts = [
             max(
-                LINE_WIDTH
+                MIN_DISTANCE
                 - (child_layers_info[i]['min'] - prev_layers_info[i]['max']),
                 0,
             )
