@@ -13,6 +13,7 @@ INPUT_DIR = 'input'
 OUTPUT_DIR = 'output'
 
 DUMMY_PREFIX = 'dummy-ca43f807-7738-4305-b56c-080ab5afa357-'
+EPSILON = 1e-6
 
 X_UNIT = 40
 Y_UNIT = 40
@@ -150,7 +151,9 @@ def fill_layers_min_dummies(
     layers.append([vertex_y[0][1]])
     vertex_layer[vertex_y[0][1]] = 0
     for y_float, vertex in vertex_y[1:]:
-        if len(pred[vertex]) < len(adj[vertex]):
+        if y_float - EPSILON < round(y_float) < y_float + EPSILON:
+            y = int(round(y_float))
+        elif len(pred[vertex]) < len(adj[vertex]):
             y = math.ceil(y_float)
         else:
             y = math.floor(y_float)
