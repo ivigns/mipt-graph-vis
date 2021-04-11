@@ -1,11 +1,13 @@
+import math
 import os
 import queue
-import sys
 import typing
 
 import networkx as nx
+import numpy as np
 from PIL import Image
 from PIL import ImageDraw
+import scipy.optimize as opt
 
 INPUT_DIR = 'input'
 OUTPUT_DIR = 'output'
@@ -22,13 +24,13 @@ PAD = 2  # in units
 def insert_next_vertices(
         vertex: str,
         adj: nx.classes.coreviews.AdjacencyView,
-        preds: nx.classes.coreviews.AdjacencyView,
+        pred: nx.classes.coreviews.AdjacencyView,
         vertex_priority: typing.Dict[str, int],
         next_queue: queue.PriorityQueue,
         next_set: typing.Set[str],
 ):
     for next_vertex in adj[vertex]:
-        next_preds = preds[next_vertex]
+        next_preds = pred[next_vertex]
         if next_vertex not in next_set and all(
                 (v in vertex_priority) for v in next_preds
         ):
@@ -44,15 +46,15 @@ def top_sort(graph: nx.DiGraph) -> typing.List[str]:
     next_queue: queue.PriorityQueue = queue.PriorityQueue()
     next_set: typing.Set[str] = set()
 
-    preds = graph.pred
+    pred = graph.pred
     adj = graph.adj
     for vertex in graph.nodes:
-        if not preds[vertex]:
+        if not pred[vertex]:
             vertex_priority[vertex] = len(result)
             result.append(vertex)
 
             insert_next_vertices(
-                vertex, adj, preds, vertex_priority, next_queue, next_set,
+                vertex, adj, pred, vertex_priority, next_queue, next_set,
             )
 
     assert next_set
@@ -64,12 +66,25 @@ def top_sort(graph: nx.DiGraph) -> typing.List[str]:
         vertex_priority[vertex] = len(result)
         result.append(vertex)
         insert_next_vertices(
-            vertex, adj, preds, vertex_priority, next_queue, next_set,
+            vertex, adj, pred, vertex_priority, next_queue, next_set,
         )
     return result
 
 
-def fill_layers(
+def reverse_layers(
+        layers: typing.List[typing.List[str]],
+        vertex_layer: typing.Dict[str, int],
+) -> typing.Tuple[typing.List[typing.List[str]], typing.Dict[str, int]]:
+    return (
+        [x for x in reversed(layers)],
+        {
+            key: (len(layers) - value - 1)
+            for key, value in vertex_layer.items()
+        },
+    )
+
+
+def fill_layers_fix_width(
         vertices: typing.List[str], graph: nx.DiGraph, max_width: int,
 ) -> typing.Tuple[typing.List[typing.List[str]], typing.Dict[str, int]]:
     layers: typing.List[typing.List[str]] = []
@@ -89,26 +104,68 @@ def fill_layers(
                 vertex_layer[vertex] = i
                 break
 
-    return (
-        [x for x in reversed(layers)],
-        {
-            key: (len(layers) - value - 1)
-            for key, value in vertex_layer.items()
-        },
-    )
+    return reverse_layers(layers, vertex_layer)
 
 
 def build_fix_width(
         graph: nx.DiGraph, max_width: int,
 ) -> typing.Tuple[typing.List[typing.List[str]], typing.Dict[str, int]]:
-    return fill_layers(top_sort(graph), graph, max_width)
+    return fill_layers_fix_width(top_sort(graph), graph, max_width)
+
+
+def linprog_top_sort(
+        graph: nx.DiGraph,
+) -> typing.List[typing.Tuple[float, str]]:
+    vertices = list(graph.nodes.keys())
+    edges = graph.edges
+    vertex_index = {v: i for i, v in enumerate(vertices)}
+    c = np.zeros(len(vertices))
+    A = np.zeros((len(edges), len(vertices)))
+    b = -(np.ones(len(edges)))
+    for i, edge in enumerate(edges):
+        # edge: u -> v
+        u = vertex_index[edge[0]]
+        v = vertex_index[edge[1]]
+
+        c[u] += 1
+        c[v] -= 1
+        A[i, u] = -1
+        A[i, v] = 1
+
+    result = list(opt.linprog(c, A_ub=A, b_ub=b).x)
+    min_value = min(result)
+    for i in range(len(result)):
+        result[i] -= min_value
+    return sorted((x, v) for x, v in zip(result, vertices))
+
+
+def fill_layers_min_dummies(
+        vertex_y: typing.List[typing.Tuple[float, str]], graph: nx.DiGraph,
+) -> typing.Tuple[typing.List[typing.List[str]], typing.Dict[str, int]]:
+    layers: typing.List[typing.List[str]] = []
+    vertex_layer: typing.Dict[str, int] = {}
+    adj = graph.adj
+    pred = graph.pred
+
+    layers.append([vertex_y[0][1]])
+    vertex_layer[vertex_y[0][1]] = 0
+    for y_float, vertex in vertex_y[1:]:
+        if len(pred[vertex]) < len(adj[vertex]):
+            y = math.ceil(y_float)
+        else:
+            y = math.floor(y_float)
+        while y >= len(layers):
+            layers.append([])
+        layers[y].append(vertex)
+        vertex_layer[vertex] = y
+
+    return reverse_layers(layers, vertex_layer)
 
 
 def build_min_dummies(
         graph: nx.DiGraph,
 ) -> typing.Tuple[typing.List[typing.List[str]], typing.Dict[str, int]]:
-    # todo
-    return [], {}
+    return fill_layers_min_dummies(linprog_top_sort(graph), graph)
 
 
 def build_layers(
