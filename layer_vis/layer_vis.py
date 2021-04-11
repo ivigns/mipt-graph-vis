@@ -224,8 +224,6 @@ def visualize_graph(
     image = Image.new('L', actual_size, 255)
     img_draw = ImageDraw.Draw(image)
 
-    print(layers)
-
     adj = graph.adj
     for y, layer in enumerate(layers):
         for x, vertex in enumerate(layer):
