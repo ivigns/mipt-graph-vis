@@ -10,6 +10,8 @@ from PIL import ImageDraw
 INPUT_DIR = 'input'
 OUTPUT_DIR = 'output'
 
+DUMMY_PREFIX = 'dummy-ca43f807-7738-4305-b56c-080ab5afa357-'
+
 X_UNIT = 40
 Y_UNIT = 40
 DOT_SIZE = 20
@@ -69,13 +71,13 @@ def top_sort(graph: nx.DiGraph) -> typing.List[str]:
 
 def fill_layers(
         vertices: typing.List[str], graph: nx.DiGraph, max_width: int,
-) -> typing.List[typing.List[str]]:
+) -> typing.Tuple[typing.List[typing.List[str]], typing.Dict[str, int]]:
     layers: typing.List[typing.List[str]] = []
-    adj = graph.adj
     vertex_layer: typing.Dict[str, int] = {}
+    adj = graph.adj
     for vertex in reversed(vertices):
         min_layer = (
-            (min(vertex_layer[v] for v in adj[vertex]) + 1)
+            (max(vertex_layer[v] for v in adj[vertex]) + 1)
             if adj[vertex]
             else 0
         )
@@ -84,43 +86,120 @@ def fill_layers(
                 layers.append([])
             if len(layers[i]) < max_width:
                 layers[i].append(vertex)
+                vertex_layer[vertex] = i
                 break
 
-    return layers
+    return (
+        [x for x in reversed(layers)],
+        {
+            key: (len(layers) - value - 1)
+            for key, value in vertex_layer.items()
+        },
+    )
 
 
 def build_fix_width(
         graph: nx.DiGraph, max_width: int,
-) -> typing.List[typing.List[str]]:
+) -> typing.Tuple[typing.List[typing.List[str]], typing.Dict[str, int]]:
     return fill_layers(top_sort(graph), graph, max_width)
 
 
-def build_min_dummies(graph: nx.DiGraph) -> typing.List[typing.List[str]]:
+def build_min_dummies(
+        graph: nx.DiGraph,
+) -> typing.Tuple[typing.List[typing.List[str]], typing.Dict[str, int]]:
     # todo
-    return []
+    return [], {}
 
 
 def build_layers(
         graph: nx.DiGraph, max_width: typing.Optional[int],
-) -> typing.List[typing.List[str]]:
+) -> typing.Tuple[typing.List[typing.List[str]], typing.Dict[str, int]]:
     """
-    Returns (layers with vertices, size of graph).
-    Size is measured in units. Units must be converted to pixels
-    by multiplying on X_UNIT or Y_UNIT.
+    Returns (layers with vertices, layer number by vertex map).
     """
     if max_width is None:
         return build_min_dummies(graph)
     return build_fix_width(graph, max_width)
 
 
-def visualize_graph(
-        graph: nx.DiGraph, layers: typing.List[typing.List[str]], name: str,
+def new_dummy(graph: nx.DiGraph, dummies_count: int) -> typing.Tuple[str, int]:
+    dummy = DUMMY_PREFIX + str(dummies_count)
+    dummies_count += 1
+    graph.add_node(dummy)
+    return dummy, dummies_count
+
+
+def fill_dummies(
+        graph: nx.DiGraph,
+        layers: typing.List[typing.List[str]],
+        vertex_layer: typing.Dict[str, int],
 ):
-    size = (max(len(layer) for layer in layers), len(layers))
+    adj = graph.adj
+    dummies_count = 0
+    for y, layer in enumerate(layers):
+        for vertex in layer:
+            if vertex.startswith(DUMMY_PREFIX):
+                continue
+            adj_vertices = list(adj[vertex].keys())
+            for adj_vertex in adj_vertices:
+                adj_y = vertex_layer[adj_vertex]
+                if adj_y - y > 1:
+                    graph.remove_edge(vertex, adj_vertex)
+                    dummies = []
+                    for i in range(adj_y - y - 1):
+                        dummy, dummies_count = new_dummy(graph, dummies_count)
+                        layers[y + i + 1].append(dummy)
+                        vertex_layer[dummy] = y + i + 1
+                        dummies.append(dummy)
+                    vertices = [vertex] + dummies + [adj_vertex]
+                    for v_from, v_to in zip(vertices[:-1], vertices[1:]):
+                        graph.add_edge(v_from, v_to)
+
+
+def visualize_graph(
+        graph: nx.DiGraph,
+        layers: typing.List[typing.List[str]],
+        vertex_layer: typing.Dict[str, int],
+        name: str,
+):
+    size = (max(len(layer) for layer in layers) - 1, len(layers) - 1)
     actual_size = ((size[0] + 2 * PAD) * X_UNIT, (size[1] + 2 * PAD) * Y_UNIT)
     image = Image.new('L', actual_size, 255)
     img_draw = ImageDraw.Draw(image)
-    # todo
+
+    print(layers)
+
+    adj = graph.adj
+    for y, layer in enumerate(layers):
+        for x, vertex in enumerate(layer):
+            for adj_vertex in adj[vertex]:
+                adj_y = vertex_layer[adj_vertex]
+                adj_x = [
+                    i for i, v in enumerate(layers[adj_y]) if v == adj_vertex
+                ][0]
+                img_draw.line(
+                    (
+                        (x + PAD) * X_UNIT,
+                        (y + PAD) * Y_UNIT,
+                        (adj_x + PAD) * X_UNIT,
+                        (adj_y + PAD) * Y_UNIT,
+                    ),
+                    fill='black',
+                    width=LINE_WIDTH,
+                )
+            if not vertex.startswith(DUMMY_PREFIX):
+                img_draw.ellipse(
+                    (
+                        (x + PAD) * X_UNIT - DOT_SIZE / 2,
+                        (y + PAD) * Y_UNIT - DOT_SIZE / 2,
+                        (x + PAD) * X_UNIT + DOT_SIZE / 2,
+                        (y + PAD) * Y_UNIT + DOT_SIZE / 2,
+                    ),
+                    fill='white',
+                    outline='black',
+                    width=LINE_WIDTH,
+                )
+
     del img_draw
     image.save(os.path.join(OUTPUT_DIR, name + '.png'))
 
@@ -133,8 +212,9 @@ def main():
         if file_name.endswith('.xml') or file_name.endswith('.graphml'):
             path = os.path.join(INPUT_DIR, file_name)
             graph = nx.read_graphml(path)
-            layers = build_layers(graph, max_width)
-            visualize_graph(graph, layers, file_name)
+            layers, vertex_layer = build_layers(graph, max_width)
+            fill_dummies(graph, layers, vertex_layer)
+            visualize_graph(graph, layers, vertex_layer, file_name)
 
 
 if __name__ == '__main__':
